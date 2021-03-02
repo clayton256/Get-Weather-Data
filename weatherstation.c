@@ -2,31 +2,31 @@
     Documentation at desert-home.com
 
     Experimentation with a USB interface to the Acu-Rite 5 in 1 Weatherstation
-    specifically for the Raspberry Pi.  The code may work on other systems, but I 
-    don't have one of those.  Contrary to other folk's thinking, I don't care if 
+    specifically for the Raspberry Pi.  The code may work on other systems, but I
+    don't have one of those.  Contrary to other folk's thinking, I don't care if
     this ever runs on a Windows PC or an Apple anything.
-    
+
     I specifically used a model 2032 display with the sensor that I picked
-    up at one of those warehouse stores.  The display has a usb plug on it and 
+    up at one of those warehouse stores.  The display has a usb plug on it and
     I thought it might be possible to read the usb port and massage the data myself.
-    
+
     This code represents the result of that effort.
-    
+
     I gathered ideas from all over the web.  I use the latest (for this second)
-    libusb and about a thousand examples of various things that other people have 
+    libusb and about a thousand examples of various things that other people have
     done and posted about.  Frankly, I simply can't remember all of them, so please,
     don't be offended if you see your ideas somewhere in here and it isn't attributed.
-    
+
     I simply lost track of where I found what.
-    
+
     This module relies on libusb version 1.0.19 which, at this time, can only be
     compiled from source on the raspberry pi.
-    
+
     Because there likely to be a version of libusb and the associated header file
     on a Pi, use the command line below to build it since the build of libusb-1.0.19
     places things in /usr/local
-    
-    cc -o weatherstation  weatherstation.c -L/usr/local/lib -lusb-1.0    
+
+    cc -o weatherstation  weatherstation.c -L/usr/local/lib -lusb-1.0
     use ldd weatherstation to check which libraries are linked in.
     If you still have trouble with compilation, remember that cc has a -v
     parameter that can help you unwind what is happening.
@@ -37,27 +37,44 @@
 #include <signal.h>
 #include <time.h>
 #include <unistd.h>
+#include <string.h>
 #include <sys/time.h>
 #include <libusb-1.0/libusb.h>
+#include <curl/curl.h>
+
+#define TRUE    1
+#define FALSE   0
 
 //this bit added by JZ
-//time intervals to wait between updates
+//time intervals in seconds to wait between updates
 int timeint1 = 10; //report type 1
 int timeint2 = 30; //report type 2
 int timeint3 = 15; //put out data
+int timeint4 = 600; //upload data
 
 // The vendor id and product number for the AcuRite 5 in 1 weather head.
 #define VENDOR 0x24c0
 #define PRODUCT 0x0003
 
 // I store things about the weather device USB connection here.
-struct {
+struct stationData
+{
     libusb_device *device;
     libusb_device_handle *handle;
     int verbose;
 } weatherStation;
+
+#define WUNDERSTRSZ 64
+struct stationWU
+{
+    // my PWS ID and password
+    char stationID[WUNDERSTRSZ];
+    char stationPassword[WUNDERSTRSZ];
+};
+
+
 // These are the sensors the the 5 in 1 weather head provides
-struct {
+struct weatherData {
     float   windSpeed;
     time_t  wsTime;
     int     windDirection;
@@ -68,10 +85,25 @@ struct {
     time_t  hTime;
     int     rainCounter;
     time_t  rcTime;
+    int     rainRaw;
+    time_t  rrTime;
+    float   barometer;
+    time_t  bTime;
 } weatherData;
 
 // This is just a function prototype for the compiler
 void closeUpAndLeave();
+
+size_t strlcpy(char *dst, const char *src, size_t dstsize)
+{
+  size_t len = strlen(src);
+  if(dstsize) {
+    size_t bl = (len < dstsize-1 ? len : dstsize-1);
+    ((char*)memcpy(dst, src, bl))[bl] = 0;
+  }
+  return len;
+}
+
 
 // I want to catch control-C and close down gracefully
 void sig_handler(int signo)
@@ -101,24 +133,167 @@ char *Direction[] = {
     "NE",
     "SSE",
     "NNE",
-    "S"  };
+    "S"
+};
+
+char *DirectionNum[] = {
+    "315",
+    "248",
+    "293",
+    "270",
+    "358",
+    "225",
+    "0",
+    "298",
+    "68",
+    "135",
+    "90",
+    "113",
+    "45",
+    "168",
+    "23",
+    "180"
+};
 
 void showit(){
 
-    fprintf(stdout, "{\"windSpeed\":{\"WS\":\"%.1f\",\"t\":\"%d\"},"
-                    "\"windDirection\":{\"WD\":\"%s\",\"t\":\"%d\"},"
-                    "\"temperature\":{\"T\":\"%.1f\",\"t\":\"%d\"},"
-                    "\"humidity\":{\"H\":\"%d\",\"t\":\"%d\"},"
-                    "\"rainCounter\":{\"RC\":\"%d\",\"t\":\"%d\"}}\n",
+    fprintf(stdout, "{\"windSpeed\":{\"WS\":\"%0.1f\",\"t\":\"%ld\"},"
+                    "\"windDirection\":{\"WDS\":\"%s\",\"t\":\"%ld\"},"
+                    "\"windDirection\":{\"WDD\":\"%s\",\"t\":\"%ld\"},"
+                    "\"windDirRaw\":{\"WDR\":\"%d\",\"t\":\"%ld\"},"
+                    "\"temperature\":{\"T\":\"%0.1f\",\"t\":\"%ld\"},"
+                    "\"humidity\":{\"H\":\"%d\",\"t\":\"%ld\"},"
+                    "\"rainCounter\":{\"RC\":\"%d\",\"t\":\"%ld\"},"
+                    "\"rainRaw\":{\"RR\":\"%d\",\"t\":\"%ld\"},"
+                    "\"Barometer\":{\"BP\":\"%0.1f\",\"t\":\"%ld\"}"
+                    "}\n",
             weatherData.windSpeed, weatherData.wsTime,
             Direction[weatherData.windDirection],weatherData.wdTime,
+            DirectionNum[weatherData.windDirection],weatherData.wdTime,
+            weatherData.windDirection,weatherData.wdTime,
             weatherData.temperature, weatherData.tTime,
-            weatherData.humidity, weatherData.hTime,
-            weatherData.rainCounter, weatherData.rcTime);
+            (int)weatherData.humidity, weatherData.hTime,
+            weatherData.rainCounter, weatherData.rcTime,
+            weatherData.rainRaw, weatherData.rrTime,
+            weatherData.barometer, weatherData.bTime
+        );
     fflush(stdout);
+    return;
 }
-/* 
-This code translates the data from the 5 in 1 sensors to something 
+
+int mccurl(struct weatherData * wx, struct stationWU * wu)
+{
+    CURL *      curl;
+    CURLcode    res;
+    int         error = TRUE;
+    time_t      now;
+    struct tm * dt;
+    char        url[2048];
+    char        dest[70];
+
+    time(&now);
+    dt = gmtime(&now);
+
+    strftime(dest,sizeof(dest)-1, "%FT%T", dt);
+    char *urlfmt = "https://markandgrace.com/wx/index.php?view=upload&tm=%s&t1=%0.1f&rh=%d&wdspd=%0.1f&wddir=%s&rn=%0.1f&bp=%0.1f";
+    snprintf(url, sizeof(url)-1,
+            urlfmt,
+            dest,
+            wx->temperature,
+            wx->humidity,
+            wx->windSpeed,
+            Direction[wx->windDirection],
+            (wx->rainCounter*0.01),
+            wx->barometer
+        );
+    fprintf(stderr, "strlen(url)=%ld\nurl=%s\n", strlen(url), url);
+
+    curl_global_init(CURL_GLOBAL_DEFAULT);
+    curl = curl_easy_init();
+    if(curl)
+    {
+        curl_easy_setopt(curl, CURLOPT_URL, url);
+        curl_easy_perform(curl);
+    }
+    return 0;
+}
+
+
+int wucurl(struct weatherData * wx, struct stationWU * wu)
+{
+    CURL *      curl;
+    CURLcode    res;
+    int         error = TRUE;
+    time_t      now;
+    struct tm * dt;
+    char        url[2048];
+
+    time(&now);
+    dt = gmtime(&now);
+
+    curl_global_init(CURL_GLOBAL_DEFAULT);
+
+    char *urlfmt = "http://weatherstation.wunderground.com/weatherstation/updateweatherstation.php?"
+      "ID=%s&"
+      "PASSWORD=%s"
+      "&dateutc=now"
+      //"&dateutc=%04d-%02d-%02dT%02d:%02d:%02d"
+      "&windspeedmph=%0.1f"
+      "&winddir=%s"
+      "&tempf=%0.1f"
+      "&rainin=%0.1f"
+      "&humidity=%d"
+      "baroinhg=%0.1f"
+      "&softwaretype=mark-clayton.com";
+
+ /* 1 ID
+  * 2 passwd
+  * 3 yr
+  * 4 mon
+  * 5 day
+  * 6 hr
+  * 7 min
+  * 8 sec
+  * 9 winspeed
+  * 11 Outdoor temp
+  * 12 rain in inches
+  * 14 humidity
+  */
+    snprintf(url, sizeof(url)-1,
+            urlfmt,
+            wu->stationID,
+            wu->stationPassword,
+            //dt->tm_year,
+            //dt->tm_mon,
+            //dt->tm_mday,
+            //dt->tm_hour,
+            //dt->tm_min,
+            //dt->tm_sec,
+            wx->windSpeed,
+            DirectionNum[wx->windDirection],
+            wx->temperature,
+            (wx->rainCounter*0.01),
+            wx->humidity,
+            wx->barometer
+        );
+    fprintf(stderr, "strlen(url)=%ld\nurl=%s\n", strlen(url), url);
+
+    curl = curl_easy_init();
+    if(curl)
+    {
+        curl_easy_setopt(curl, CURLOPT_URL, url);
+        curl_easy_perform(curl);
+    }
+}
+
+int store_sqlite(struct weatherData * wxdata)
+{
+    int ret = 0;
+
+    return ret;
+}
+/*
+This code translates the data from the 5 in 1 sensors to something
 that can be used by a human.
 */
 float getWindSpeed(char *data){
@@ -141,17 +316,77 @@ int getHumidity(char *data){
     int howWet = data[6] &0x7f;
     return(howWet);
 }
-int getRainCount(char *data){
-    int count = data[6] &0x7f;
-    return(count);
+int getRainCount(char* data, int* rawCount, int noisy){
+    static int  did_daily_reset = 0;
+    time_t utcnow;
+    struct tm* locnow;
+    int count = *rawCount;
+    int raincount = 0;
+    int reading = (data[6] &0x7f);
+
+    if(0 == reading && 0 < count) /* console value went to zero, counter reset? */
+    {
+        count = 0;
+    }
+
+    if(0 == count) //first starting up
+        count = reading;
+
+    raincount = reading - count;
+
+    // reset daily rain count to zero right after midnight
+    time(&utcnow);
+    locnow = localtime(&utcnow);
+    if(0 == locnow->tm_hour & 0 == did_daily_reset)
+    {
+        if(noisy) fprintf(stderr, "Did daily rain reset\n");
+        did_daily_reset = 1;
+        count = raincount;
+    }
+    if(1 == locnow->tm_hour & 1 == did_daily_reset)
+    {
+        if(noisy) fprintf(stderr, "Ready for tomorrows daily rain reset\n");
+        did_daily_reset = 0;
+    }
+
+    *rawCount = count;
+    return(raincount);
 }
+
+float getConsoleTemp(char* data, int noisy)
+{
+    unsigned int  left = (data[21] & 0x00);
+    unsigned int  lefts = (data[21]<<8);
+    unsigned int  right = (data[22] & 0x00FF);
+    unsigned int  reading = lefts | right;
+    reading &= 0x0000FFFF;
+    fprintf(stderr, "CT = %X %X %X %X %ld", left, lefts, right, reading, sizeof(unsigned int));
+    float temp = reading / 511.13;
+    fprintf(stderr, "\nConsole Temp = %0.2f\n", temp);
+    return temp;
+}
+
+float getBaroPress(char* data, int noisy)
+{
+    unsigned int  left = (data[23] & 0x00);
+    unsigned int  lefts = (data[23]<<8);
+    unsigned int  right = (data[24] & 0x00FF);
+    unsigned int  reading = lefts | right;
+    reading &= 0x0000FFFF;
+    fprintf(stderr, "BP = %X %X %X %X %ld", left, lefts, right, reading, sizeof(unsigned int));
+    float bar = 6.23 * (reading) - 20402;
+    bar /= 100.0; // convert to mbar from pascals
+    fprintf(stderr, "\nBP = %0.2f\n", bar);
+    return bar;
+}
+
 // Now that I have the data from the station, do something useful with it.
 void decode(char *data, int length, int noisy){
     //int i;
     //for(i=0; i<length; i++){
-    //    fprintf(stderr,"%0.2X ",data[i]);
+    //    fprintf(stderr,"%02X ",data[i]);
     //}
-    //fprintf(stderr,"\n"); */
+    //fprintf(stderr,"\n");
     time_t seconds = time (NULL);
     //There are two varieties of data, both of them have wind speed
     // first variety of the data
@@ -164,12 +399,13 @@ void decode(char *data, int length, int noisy){
             fprintf(stderr,"Wind Direction: %s ",Direction[getWindDirection(data)]);
         weatherData.wdTime = seconds;
         weatherData.windDirection = getWindDirection(data);
+        weatherData.rainCounter = getRainCount(data, &(weatherData.rainRaw), noisy);
+        weatherData.rcTime = seconds;
+        weatherData.rrTime = seconds;
         if(noisy){
-            fprintf(stderr,"Rain Counter: %d ",getRainCount(data));
+            fprintf(stderr,"Rain Counter: %d ",weatherData.rainCounter);
             fprintf(stderr,"\n");
         }
-        weatherData.rainCounter = getRainCount(data);
-        weatherData.rcTime = seconds;
     }
     // this is the other variety
     if ((data[2] & 0x0f) == 8){ // this has wind speed, temp and relative humidity
@@ -183,12 +419,30 @@ void decode(char *data, int length, int noisy){
         weatherData.tTime = seconds;
         if(noisy){
             fprintf(stderr,"Humidity: %d ", getHumidity(data));
-            fprintf(stderr,"\n");
+            //fprintf(stderr,"\n");
         }
         weatherData.humidity = getHumidity(data);
         weatherData.hTime = seconds;
     }
 }
+
+void decode2(char *data, int length, int noisy)
+{
+    time_t seconds = time (NULL);
+
+    getConsoleTemp(data, noisy);
+    weatherData.barometer = getBaroPress(data, noisy); // convert to mbar from pascals
+    weatherData.barometer += 21.1; //adjust for altitude, but what alt????
+    weatherData.barometer /= 33.86389;
+    weatherData.bTime = seconds;
+    if(noisy){
+        fprintf(stderr,"Baro: %0.2f ", weatherData.barometer);
+        fprintf(stderr,"\n");
+    }
+    return;
+}
+
+
 /*
 This code is related to dealing with the USB device
 */
@@ -197,8 +451,8 @@ int findDevice(libusb_device **devs)
 {
     libusb_device *dev;
     int err = 0, i = 0, j = 0;
-    uint8_t path[8]; 
-    
+    uint8_t path[8];
+
     while ((dev = devs[i++]) != NULL) {
         struct libusb_device_descriptor desc;
         int r = libusb_get_device_descriptor(dev, &desc);
@@ -218,7 +472,7 @@ int findDevice(libusb_device **devs)
         //      fprintf(stderr,".%d", path[j]);
         //}
         fprintf(stderr,"\n");
-        
+
         if (desc.idVendor == VENDOR && desc.idProduct == PRODUCT){
             fprintf(stderr,"Found the one I want\n");
             weatherStation.device = dev;
@@ -247,17 +501,17 @@ void closeUpAndLeave(){
 unsigned char data[50]; // where we want the data to go
 int getit(int whichOne, int noisy){
     int actual; // how many bytes were actually read
-    
+
     // The second parameter is bmRequestType and is a bitfield
     // See http://www.beyondlogic.org/usbnutshell/usb6.shtml
-    // for the definitions of the various bits.  With libusb, the 
+    // for the definitions of the various bits.  With libusb, the
     // #defines for these are at:
     // http://libusb.sourceforge.net/api-1.0/group__misc.html#gga0b0933ae70744726cde11254c39fac91a20eca62c34d2d25be7e1776510184209
-    actual = libusb_control_transfer(weatherStation.handle, 
+    actual = libusb_control_transfer(weatherStation.handle,
                     LIBUSB_REQUEST_TYPE_CLASS | LIBUSB_RECIPIENT_INTERFACE | LIBUSB_ENDPOINT_IN,
                     //These bytes were stolen with a USB sniffer
                     0x01,0x0100+whichOne,0,
-                    data, 50, 10000)
+                    data, 50, 10000);
     if (actual < 0){
         fprintf(stderr,"Read didn't work for report %d, %s\n", whichOne, libusb_strerror(actual));
     }
@@ -266,39 +520,56 @@ int getit(int whichOne, int noisy){
         // just allow for it.  Right this second, I've found every thing
         // I need in report 1.  When I look further at report 2, this will
         // change
-        //fprintf(stderr,"R%d:%d:", whichOne, actual);
-        //int i;
-        //for(i=0; i<actual; i++){
-        //    fprintf(stderr,"%0.2X ",data[i]);
-        //}
-        //fprintf(stderr,"\n");
+        fprintf(stderr,"R%d:%d:", whichOne, actual);
+        int i;
+        for(i=0; i<actual; i++){
+            fprintf(stderr,"%02X ",data[i]);
+        }
+        if(1 == whichOne)fprintf(stderr,"\n");
         if (whichOne == 1)
             // The actual data starts after the first byte
-            // The first byte is the report number returned by 
+            // The first byte is the report number returned by
             // the usb read.
             decode(&data[1], actual-1, noisy);
+        if (whichOne == 2) {
+            decode2(data, actual-1, noisy);
+        }
     }
 }
 // I do several things here that aren't strictly necessary.  As I learned about
-// libusb, I tried things and also used various techniques to learn about the 
+// libusb, I tried things and also used various techniques to learn about the
 // weatherstation's implementation.  I left a lot of it in here in case I needed to
 // use it later.  Someone may find it useful to hack into some other device.
 int main(int argc, char **argv)
 {
     char *usage = {"usage: %s -u -n\n"};
     int libusbDebug = 0; //This will turn on the DEBUG for libusb
-    int noisy = 0;       //This will print the packets as they come in
+    int noisy = 0;  //This will print the packets as they come in
+    int quiet = 1;
     libusb_device **devs;
     int r, err, c;
     ssize_t cnt;
-    
-    while ((c = getopt (argc, argv, "unh")) != -1)
+    struct stationWU wu;
+
+    memset(&weatherStation, '\0', sizeof(struct stationData));
+    memset(&wu, '\0', sizeof(struct stationWU));
+    memset(&weatherData, '\0', sizeof(struct weatherData));
+    weatherData.rainRaw = 0; //first starting up
+    strlcpy(wu.stationID, STATIONID, strlen(STATIONID)+1);
+    //safestrlcpy(wu.stationID, STATIONID, strlen(STATIONID)+1, WUNDERSTRSZ);
+    //safestrlcpy(wu.stationPassword, STATIONKEY, strlen(STATIONKEY)+1, WUNDERSTRSZ);
+    strlcpy(wu.stationPassword, STATIONKEY, strlen(STATIONKEY)+1);
+
+    while ((c = getopt (argc, argv, "unqh")) != -1)
         switch (c){
             case 'u':
                 libusbDebug = 1;
                 break;
             case 'n':
                 noisy = 1;
+                break;
+            case 'q':
+                quiet = 1;
                 break;
             case 'h':
                 fprintf(stderr, usage, argv[0]);
@@ -310,7 +581,7 @@ int main(int argc, char **argv)
     fprintf (stderr,"libusbDebug = %d, noisy = %d\n", libusbDebug, noisy);
 
     if (signal(SIGINT, sig_handler) == SIG_ERR)
-        fprintf(stderr,"Couldn't set up signal handler\n"); 
+        fprintf(stderr,"Couldn't set up signal handler\n");
     err = libusb_init(NULL);
     if (err < 0){
         fprintf(stderr,"Couldn't init usblib, %s\n", libusb_strerror(err));
@@ -323,7 +594,7 @@ int main(int argc, char **argv)
     else
         libusb_set_debug(NULL, LIBUSB_LOG_LEVEL_INFO);
 
-    
+
     cnt = libusb_get_device_list(NULL, &devs);
     if (cnt < 0){
         fprintf(stderr,"Couldn't get device list, %s\n", libusb_strerror(err));
@@ -343,7 +614,7 @@ int main(int argc, char **argv)
         exit(1);
     }
     fprintf(stderr,"got the device descriptor back\n");
-    
+
     // Open the device and save the handle in the weatherStation struct
     err = libusb_open(weatherStation.device, &weatherStation.handle);
     if (err){
@@ -351,13 +622,13 @@ int main(int argc, char **argv)
         exit(1);
     }
     fprintf(stderr,"I was able to open it\n");
-    // There's a bug in either the usb library, the linux driver or the 
+    // There's a bug in either the usb library, the linux driver or the
     // device itself.  I suspect the usb driver, but don't know for sure.
     // If you plug and unplug the weather station a few times, it will stop
-    // responding to reads.  It also exhibits some strange behaviour to 
+    // responding to reads.  It also exhibits some strange behaviour to
     // getting the configuration.  I found out after a couple of days of
     // experimenting that doing a clear-halt on the device while before it
-    // was opened it would clear the problem.  So, I have one here and a 
+    // was opened it would clear the problem.  So, I have one here and a
     // little further down after it has been opened.
     fprintf(stderr,"trying clear halt on endpoint %X ... ", 0x81);
     err = libusb_clear_halt(weatherStation.handle, 0x81);
@@ -367,7 +638,7 @@ int main(int argc, char **argv)
     else {
         fprintf(stderr,"OK\n");
     }
-    
+
     // Now that it's opened, I can free the list of all devices
     libusb_free_device_list(devs, 1); // Documentation says to get rid of the list
                                       // Once I have the device I need
@@ -382,7 +653,7 @@ int main(int argc, char **argv)
     }
 
     int activeConfig;
-    err =libusb_get_configuration   (weatherStation.handle, &activeConfig);
+    err =libusb_get_configuration(weatherStation.handle, &activeConfig);
     if (err){
         fprintf(stderr,"Can't get current active configuration, %s\n", libusb_strerror(err));;
         exit(1);
@@ -390,14 +661,14 @@ int main(int argc, char **argv)
     fprintf(stderr,"Currently active configuration is %d\n", activeConfig);
 
     if(activeConfig != 1){
-        err = libusb_set_configuration  (weatherStation.handle, 1);
+        err = libusb_set_configuration(weatherStation.handle, 1);
         if (err){
             fprintf(stderr,"Cannot set configuration, %s\n", libusb_strerror(err));;
             exit(1);
         }
     fprintf(stderr,"Just did the set configuration\n");
     }
-    
+
     err = libusb_claim_interface(weatherStation.handle, 0); //claim interface 0 (the first) of device (mine had jsut 1)
     if(err) {
         fprintf(stderr,"Cannot claim interface, %s\n", libusb_strerror(err));
@@ -427,8 +698,8 @@ int main(int argc, char **argv)
             for(k=0; k < (int)interdesc->bNumEndpoints; k++) {
                 epdesc = &interdesc->endpoint[k];
                 fprintf(stderr,"Descriptor Type: %d\n",(int)epdesc->bDescriptorType);
-                fprintf(stderr,"Endpoint Address: 0x%0.2X\n",(int)epdesc->bEndpointAddress);
-                // Below is how to tell which direction the 
+                fprintf(stderr,"Endpoint Address: 0x%2X\n",(int)epdesc->bEndpointAddress);
+                // Below is how to tell which direction the
                 // endpoint is supposed to work.  It's the high order bit
                 // in the endpoint address.  I guess they wanted to hide it.
                 fprintf(stderr," Direction is ");
@@ -449,6 +720,25 @@ int main(int argc, char **argv)
     else {
         fprintf(stderr,"OK\n");
     }
+/*
+    if (daemonize) {
+        devnull = open(_PATH_DEVNULL, O_RDWR, 0);
+        if (devnull == -1)
+            err(1, "open(%s)", _PATH_DEVNULL);
+    }
+
+    if (!drop_privs())
+        err(1, "cannot drop privileges");
+
+    if (daemonize) {
+        if (rdaemon(devnull) == -1)
+            err(1, "cannot daemonize");
+        openlog(__progname, LOG_PID | LOG_NDELAY, LOG_DAEMON);
+    }
+
+    / * Use logmsg for output from here on. * /
+*/
+
 
     // So, for the weather station we now know it has one endpoint and it is set to
     // send data to the host.  Now we can experiment with that.
@@ -464,8 +754,12 @@ int main(int argc, char **argv)
         if(tickcounter % timeint2 == 0){
             getit(2, noisy);
         }
-        if (tickcounter % timeint3 == 0){
+        if ((tickcounter % timeint3 == 0) & !quiet){
             showit();
+        }
+        if (tickcounter % timeint4 == 0){
+            wucurl(&weatherData, &wu);
+            mccurl(&weatherData, &wu);
         }
     }
 }
