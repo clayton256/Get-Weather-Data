@@ -184,7 +184,7 @@ void showit(){
 int mccurl(struct weatherData * wx, struct stationWU * wu)
 {
     CURL *      curl;
-    CURLcode    res;
+    CURLcode    retval;
     int         error = TRUE;
     time_t      now;
     struct tm * dt;
@@ -213,7 +213,9 @@ int mccurl(struct weatherData * wx, struct stationWU * wu)
     if(curl)
     {
         curl_easy_setopt(curl, CURLOPT_URL, url);
-        curl_easy_perform(curl);
+        retval = curl_easy_perform(curl);
+        curl_easy_cleanup(curl);
+        fprintf(stderr,"CURL retval: %d\n", retval);
     }
     return 0;
 }
@@ -222,7 +224,7 @@ int mccurl(struct weatherData * wx, struct stationWU * wu)
 int wucurl(struct weatherData * wx, struct stationWU * wu)
 {
     CURL *      curl;
-    CURLcode    res;
+    CURLcode    retval;
     int         error = TRUE;
     time_t      now;
     struct tm * dt;
@@ -282,7 +284,9 @@ int wucurl(struct weatherData * wx, struct stationWU * wu)
     if(curl)
     {
         curl_easy_setopt(curl, CURLOPT_URL, url);
-        curl_easy_perform(curl);
+        retval = curl_easy_perform(curl);
+        curl_easy_cleanup(curl);
+        fprintf(stderr,"CURL retval: %d\n", retval);
     }
 }
 
@@ -403,7 +407,7 @@ void decode(char *data, int length, int noisy){
         weatherData.rcTime = seconds;
         weatherData.rrTime = seconds;
         if(noisy){
-            fprintf(stderr,"Rain Counter: %d ",weatherData.rainCounter);
+            fprintf(stderr,"\nRain Counter: %d ",weatherData.rainCounter);
             fprintf(stderr,"\n");
         }
     }
