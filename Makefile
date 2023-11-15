@@ -1,16 +1,16 @@
 
 
-
+PLATFORM=$(shell uname -s)
 
 STATIONID="KPALEHIG21"
 STATIONKEY="rURDv0YC"
 
-ifeq ($(),"TRUE")
+ifeq ($(PLATFORM),"TRUE")
 	SYSTEM=mipsel-openwrt-linux-
 	#export STAGING_DIR=/home/clayton/Projects/omega2/staging_dir
 	export STAGING_DIR=/root/remote/staging_dir
 	BASEDIR=$(STAGING_DIR)
-	LIBS=-lmbedtls -lmbedx509 -lmbedcrypto 
+	LIBS=-lmbedtls -lmbedx509 -lmbedcrypto
 	LIBDIR=$(BASEDIR)$(TARGET)/usr/lib/
 	INCDIR=$(BASEDIR)$(TARGET)/usr/include/
 	BINDIR=$(BASEDIR)$(TOOLCHAIN)/bin/
@@ -23,20 +23,25 @@ ifeq ($(),"TRUE")
 		TOOLCHAIN=/host
 		TARGET=/target-mipsel_24kc_musl
 	endif
-else
+endif
+ifeq ($(PLATFORM),Linux)
 	SYSTEM=/usr/
 	LIBS=
 	LIBDIR=/usr/lib/x86_64-linux-gnu/
 endif
-
-
+ifeq ($(PLATFORM), Darwin)
+	SYSTEM=/usr/
+	LIBS=
+	LIBDIR=/opt/homebrew/lib
+	INCDIR=/opt/homebrew/include/
+endif
 
 
 all: weatherstation
 
 
 weatherstation: weatherstation.c
-	$(CC) -v -g weatherstation.c -o $@ -I$(INCDIR) -I$(BASEDIR)/target-mipsel_24kc_musl/usr/include/ -DSTATIONID='${STATIONID}' -DSTATIONKEY='${STATIONKEY}' -lusb-1.0 -lcurl $(LIBS) -L$(LIBDIR) -L$(LIBDIR)/usr/local/
+	$(CC) -v -g weatherstation.c -o $@ -I$(INCDIR) -I$(BASEDIR)/target-mipsel_24kc_musl/usr/include/ -DSTATIONID='${STATIONID}' -DSTATIONKEY='${STATIONKEY}' -DPLATFORM='${PLATFORM}' -lusb-1.0 -lcurl $(LIBS) -L$(LIBDIR) -L$(LIBDIR)/usr/local/
 
 
 

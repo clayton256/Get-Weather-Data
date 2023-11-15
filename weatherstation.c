@@ -94,6 +94,7 @@ struct weatherData {
 // This is just a function prototype for the compiler
 void closeUpAndLeave();
 
+#if PLATFORM == 'Linux'
 size_t strlcpy(char *dst, const char *src, size_t dstsize)
 {
   size_t len = strlen(src);
@@ -103,7 +104,7 @@ size_t strlcpy(char *dst, const char *src, size_t dstsize)
   }
   return len;
 }
-
+#endif
 
 // I want to catch control-C and close down gracefully
 void sig_handler(int signo)
