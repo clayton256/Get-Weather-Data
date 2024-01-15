@@ -41,9 +41,14 @@ all: weatherstation
 
 
 weatherstation: weatherstation.c
-	$(CC) -v -g weatherstation.c -o $@ -I$(INCDIR) -I$(BASEDIR)/target-mipsel_24kc_musl/usr/include/ -DSTATIONID='${STATIONID}' -DSTATIONKEY='${STATIONKEY}' -DPLATFORM='${PLATFORM}' -lusb-1.0 -lcurl $(LIBS) -L$(LIBDIR) -L$(LIBDIR)/usr/local/
+	$(CC) -v -g weatherstation.c -o $@ -Wno-deprecated -I$(INCDIR) -I$(BASEDIR)/target-mipsel_24kc_musl/usr/include/ -DSTATIONID='${STATIONID}' -DSTATIONKEY='${STATIONKEY}' -DPLATFORM='${PLATFORM}' -lusb-1.0 -lcurl $(LIBS) -L$(LIBDIR) -L$(LIBDIR)
 
 
+install:
+	plutil -lint com.mark-clayton.weatherstation
+	launchctl unload com.mark-clayton.weatherstation
+	cp com.mark-clayton.weatherstation.plist /Library/LaunchDaemons
+	launchctl load com.mark-clayton.weatherstation
 
 clean:
 	rm weatherstation.o weatherstation

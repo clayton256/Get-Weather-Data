@@ -94,7 +94,8 @@ struct weatherData {
 // This is just a function prototype for the compiler
 void closeUpAndLeave();
 
-#if PLATFORM == 'Linux'
+//#if PLATFORM == 'Linux'
+#if __linux__
 size_t strlcpy(char *dst, const char *src, size_t dstsize)
 {
   size_t len = strlen(src);
@@ -237,17 +238,16 @@ int wucurl(struct weatherData * wx, struct stationWU * wu)
     curl_global_init(CURL_GLOBAL_DEFAULT);
 
     char *urlfmt = "http://weatherstation.wunderground.com/weatherstation/updateweatherstation.php?"
-      "ID=%s&"
-      "PASSWORD=%s"
-      "&dateutc=now"
-      //"&dateutc=%04d-%02d-%02dT%02d:%02d:%02d"
+      "ID=%s"
+      "&PASSWORD=%s"
+      "&dateutc=now" //"&dateutc=%04d-%02d-%02dT%02d:%02d:%02d"
       "&windspeedmph=%0.1f"
       "&winddir=%s"
       "&tempf=%0.1f"
-      "&rainin=%0.1f"
+      "&dailyrainin=%0.1f"
       "&humidity=%d"
-      "baroinhg=%0.1f"
-      "&softwaretype=mark-clayton.com";
+      "&baromin=%0.1f"
+      "&softwaretype=mark-clayton.com&action=updateraw";
 
  /* 1 ID
   * 2 passwd
@@ -288,7 +288,9 @@ int wucurl(struct weatherData * wx, struct stationWU * wu)
         retval = curl_easy_perform(curl);
         curl_easy_cleanup(curl);
         fprintf(stderr,"CURL retval: %d\n", retval);
+        error = FALSE;
     }
+    return error;
 }
 
 int store_sqlite(struct weatherData * wxdata)
@@ -540,6 +542,7 @@ int getit(int whichOne, int noisy){
             decode2(data, actual-1, noisy);
         }
     }
+    return actual;
 }
 // I do several things here that aren't strictly necessary.  As I learned about
 // libusb, I tried things and also used various techniques to learn about the
@@ -595,9 +598,9 @@ int main(int argc, char **argv)
     // This is where you can get debug output from libusb.
     // just set it to LIBUSB_LOG_LEVEL_DEBUG
     if (libusbDebug)
-        libusb_set_debug(NULL, LIBUSB_LOG_LEVEL_DEBUG);
+        libusb_set_debug(NULL, LIBUSB_LOG_LEVEL_DEBUG);//libusb_set_option(ctx, LIBUSB_OPTION_LOG_LEVEL, LIBUSB_DEBUG);
     else
-        libusb_set_debug(NULL, LIBUSB_LOG_LEVEL_INFO);
+        libusb_set_debug(NULL, LIBUSB_LOG_LEVEL_INFO);//libusb_set_option(ctx, LIBUSB_OPTION_LOG_LEVEL, LIBUSB_LOG_LEVEL_WARNING);
 
 
     cnt = libusb_get_device_list(NULL, &devs);
@@ -708,7 +711,7 @@ int main(int argc, char **argv)
                 // endpoint is supposed to work.  It's the high order bit
                 // in the endpoint address.  I guess they wanted to hide it.
                 fprintf(stderr," Direction is ");
-                if ((int)epdesc->bEndpointAddress & LIBUSB_ENDPOINT_IN != 0)
+                if (((int)epdesc->bEndpointAddress & LIBUSB_ENDPOINT_IN) != 0)
                     fprintf(stderr," In (device to host)");
                 else
                     fprintf(stderr," Out (host to device)");
