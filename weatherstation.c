@@ -42,6 +42,8 @@
 #include <libusb-1.0/libusb.h>
 #include <curl/curl.h>
 
+#define WXVERSION "0.0.10"
+
 #define TRUE    1
 #define FALSE   0
 
@@ -247,7 +249,8 @@ int wucurl(struct weatherData * wx, struct stationWU * wu)
       "&dailyrainin=%0.1f"
       "&humidity=%d"
       "&baromin=%0.1f"
-      "&softwaretype=mark-clayton.com&action=updateraw";
+      "&dewptf=%0.1f"
+      "&softwaretype=mark-clayton.com-%s&action=updateraw";
 
  /* 1 ID
   * 2 passwd
@@ -262,6 +265,7 @@ int wucurl(struct weatherData * wx, struct stationWU * wu)
   * 12 rain in inches
   * 14 humidity
   */
+    double dewpt = wx->temperature - ((100.0 - (double)wx->humidity) / 5.0);
     snprintf(url, sizeof(url)-1,
             urlfmt,
             wu->stationID,
@@ -277,7 +281,9 @@ int wucurl(struct weatherData * wx, struct stationWU * wu)
             wx->temperature,
             (wx->rainCounter*0.01),
             wx->humidity,
-            wx->barometer
+            wx->barometer,
+            dewpt,
+            WXVERSION
         );
     fprintf(stderr, "strlen(url)=%ld\nurl=%s\n", strlen(url), url);
 
@@ -501,7 +507,7 @@ void closeUpAndLeave(){
     }
     libusb_close(weatherStation.handle);
     libusb_exit(NULL);
-    exit(0);
+    //exit(0); moved to calling locations
 }
 
 // This is where I read the USB device to get the latest data.
@@ -518,7 +524,7 @@ int getit(int whichOne, int noisy){
                     LIBUSB_REQUEST_TYPE_CLASS | LIBUSB_RECIPIENT_INTERFACE | LIBUSB_ENDPOINT_IN,
                     //These bytes were stolen with a USB sniffer
                     0x01,0x0100+whichOne,0,
-                    data, 50, 10000);
+                    data, 50, 100000);
     if (actual < 0){
         fprintf(stderr,"Read didn't work for report %d, %s\n", whichOne, libusb_strerror(actual));
     }
@@ -551,8 +557,8 @@ int getit(int whichOne, int noisy){
 int main(int argc, char **argv)
 {
     char *usage = {"usage: %s -u -n\n"};
-    int libusbDebug = 0; //This will turn on the DEBUG for libusb
-    int noisy = 0;  //This will print the packets as they come in
+    int libusbDebug = 1; //This will turn on the DEBUG for libusb
+    int noisy = 1;  //This will print the packets as they come in
     int quiet = 1;
     libusb_device **devs;
     int r, err, c;
@@ -724,6 +730,7 @@ int main(int argc, char **argv)
     if (err){
         fprintf(stderr,"clear halt crapped, %s  SHUCKS\n", libusb_strerror(err));;
         closeUpAndLeave();
+        exit(1);
     }
     else {
         fprintf(stderr,"OK\n");
@@ -747,7 +754,6 @@ int main(int argc, char **argv)
     / * Use logmsg for output from here on. * /
 */
 
-
     // So, for the weather station we now know it has one endpoint and it is set to
     // send data to the host.  Now we can experiment with that.
     //
@@ -755,19 +761,28 @@ int main(int argc, char **argv)
     // I'll space them out a bit.  It's weather, and it doesn't change very fast.
     int tickcounter= 0;
     while(1){
+        int rc;
         sleep(1);
         if(tickcounter++ % timeint1 == 0){
-            getit(1, noisy);
+            rc = getit(1, noisy);
+            if(rc < 0){
+                closeUpAndLeave();
+                exit(1);
+            }
         }
         if(tickcounter % timeint2 == 0){
-            getit(2, noisy);
+            rc = getit(2, noisy);
+            if(rc < 0){
+                closeUpAndLeave();
+                exit(1);
+            }
         }
         if ((tickcounter % timeint3 == 0) & !quiet){
             showit();
         }
         if (tickcounter % timeint4 == 0){
-            wucurl(&weatherData, &wu);
-            mccurl(&weatherData, &wu);
+            //wucurl(&weatherData, &wu);
+            //mccurl(&weatherData, &wu);
         }
     }
 }
