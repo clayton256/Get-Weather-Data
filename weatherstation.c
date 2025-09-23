@@ -50,7 +50,7 @@
 //this bit added by JZ
 //time intervals in seconds to wait between updates
 int timeint1 = 10; //report type 1
-int timeint2 = 30; //report type 2
+int timeint2 = 300; //report type 2
 int timeint3 = 15; //put out data
 int timeint4 = 600; //upload data
 
@@ -198,7 +198,7 @@ int mccurl(struct weatherData * wx, struct stationWU * wu)
     time(&now);
     dt = gmtime(&now);
 
-    strftime(dest,sizeof(dest)-1, "%FT%T", dt);
+    strftime(dest, sizeof(dest)-1, "%FT%T", dt);
     char *urlfmt = "https://markandgrace.com/wx/index.php?view=upload&tm=%s&t1=%0.1f&rh=%d&wdspd=%0.1f&wddir=%s&rn=%0.1f&bp=%0.1f";
     snprintf(url, sizeof(url)-1,
             urlfmt,
@@ -297,6 +297,38 @@ int wucurl(struct weatherData * wx, struct stationWU * wu)
         error = FALSE;
     }
     return error;
+}
+
+int write_line(struct weatherData * wx, struct stationWU * wu)
+{
+    FILE* fptr;
+    double dewpt = wx->temperature - ((100.0 - (double)wx->humidity) / 5.0);
+
+    time_t      now;
+    struct tm * dt;
+    char        ob[2048];
+    char        dest[70];
+
+    time(&now);
+    dt = gmtime(&now);
+
+    strftime(dest, sizeof(dest)-1, "%FT%T", dt);
+    char *obfmt = "tm=%s;t1=%0.1f;rh=%d;wdspd=%0.1f;wddir=%s;rn=%0.1f;bp=%0.1f";
+    snprintf(ob, sizeof(ob)-1,
+            obfmt,
+            dest,
+            wx->temperature,
+            wx->humidity,
+            wx->windSpeed,
+            Direction[wx->windDirection],
+            (wx->rainCounter*0.01),
+            wx->barometer
+        );
+
+    fptr = fopen("file.txt", "w");
+    fprintf(fptr, "%s\n", ob);
+    fclose(fptr);
+    return 0;
 }
 
 int store_sqlite(struct weatherData * wxdata)
@@ -604,9 +636,9 @@ int main(int argc, char **argv)
     // This is where you can get debug output from libusb.
     // just set it to LIBUSB_LOG_LEVEL_DEBUG
     if (libusbDebug)
-        libusb_set_debug(NULL, LIBUSB_LOG_LEVEL_DEBUG);//libusb_set_option(ctx, LIBUSB_OPTION_LOG_LEVEL, LIBUSB_DEBUG);
+        libusb_set_option(NULL, LIBUSB_OPTION_LOG_LEVEL, LIBUSB_LOG_LEVEL_DEBUG);
     else
-        libusb_set_debug(NULL, LIBUSB_LOG_LEVEL_INFO);//libusb_set_option(ctx, LIBUSB_OPTION_LOG_LEVEL, LIBUSB_LOG_LEVEL_WARNING);
+        libusb_set_option(NULL, LIBUSB_OPTION_LOG_LEVEL, LIBUSB_LOG_LEVEL_WARNING);
 
 
     cnt = libusb_get_device_list(NULL, &devs);
@@ -781,8 +813,9 @@ int main(int argc, char **argv)
             showit();
         }
         if (tickcounter % timeint4 == 0){
-            //wucurl(&weatherData, &wu);
-            //mccurl(&weatherData, &wu);
+            wucurl(&weatherData, &wu);
+            mccurl(&weatherData, &wu);
+            write_line(&weatherData, &wu);
         }
     }
 }
