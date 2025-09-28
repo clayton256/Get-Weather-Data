@@ -42,13 +42,15 @@
 #include <libusb-1.0/libusb.h>
 #include <curl/curl.h>
 
+#define WXVERSION "0.0.10"
+
 #define TRUE    1
 #define FALSE   0
 
 //this bit added by JZ
 //time intervals in seconds to wait between updates
 int timeint1 = 10; //report type 1
-int timeint2 = 30; //report type 2
+int timeint2 = 300; //report type 2
 int timeint3 = 15; //put out data
 int timeint4 = 600; //upload data
 
@@ -196,7 +198,7 @@ int mccurl(struct weatherData * wx, struct stationWU * wu)
     time(&now);
     dt = gmtime(&now);
 
-    strftime(dest,sizeof(dest)-1, "%FT%T", dt);
+    strftime(dest, sizeof(dest)-1, "%FT%T", dt);
     char *urlfmt = "https://markandgrace.com/wx/index.php?view=upload&tm=%s&t1=%0.1f&rh=%d&wdspd=%0.1f&wddir=%s&rn=%0.1f&bp=%0.1f";
     snprintf(url, sizeof(url)-1,
             urlfmt,
@@ -247,7 +249,8 @@ int wucurl(struct weatherData * wx, struct stationWU * wu)
       "&dailyrainin=%0.1f"
       "&humidity=%d"
       "&baromin=%0.1f"
-      "&softwaretype=mark-clayton.com&action=updateraw";
+      "&dewptf=%0.1f"
+      "&softwaretype=mark-clayton.com-%s&action=updateraw";
 
  /* 1 ID
   * 2 passwd
@@ -262,6 +265,7 @@ int wucurl(struct weatherData * wx, struct stationWU * wu)
   * 12 rain in inches
   * 14 humidity
   */
+    double dewpt = wx->temperature - ((100.0 - (double)wx->humidity) / 5.0);
     snprintf(url, sizeof(url)-1,
             urlfmt,
             wu->stationID,
@@ -277,7 +281,9 @@ int wucurl(struct weatherData * wx, struct stationWU * wu)
             wx->temperature,
             (wx->rainCounter*0.01),
             wx->humidity,
-            wx->barometer
+            wx->barometer,
+            dewpt,
+            WXVERSION
         );
     fprintf(stderr, "strlen(url)=%ld\nurl=%s\n", strlen(url), url);
 
@@ -291,6 +297,38 @@ int wucurl(struct weatherData * wx, struct stationWU * wu)
         error = FALSE;
     }
     return error;
+}
+
+int write_line(struct weatherData * wx, struct stationWU * wu)
+{
+    FILE* fptr;
+    double dewpt = wx->temperature - ((100.0 - (double)wx->humidity) / 5.0);
+
+    time_t      now;
+    struct tm * dt;
+    char        ob[2048];
+    char        dest[70];
+
+    time(&now);
+    dt = gmtime(&now);
+
+    strftime(dest, sizeof(dest)-1, "%FT%T", dt);
+    char *obfmt = "tm=%s;t1=%0.1f;rh=%d;wdspd=%0.1f;wddir=%s;rn=%0.1f;bp=%0.1f";
+    snprintf(ob, sizeof(ob)-1,
+            obfmt,
+            dest,
+            wx->temperature,
+            wx->humidity,
+            wx->windSpeed,
+            Direction[wx->windDirection],
+            (wx->rainCounter*0.01),
+            wx->barometer
+        );
+
+    fptr = fopen("file.txt", "w");
+    fprintf(fptr, "%s\n", ob);
+    fclose(fptr);
+    return 0;
 }
 
 int store_sqlite(struct weatherData * wxdata)
@@ -512,7 +550,7 @@ void closeUpAndLeave(){
     }
     libusb_close(weatherStation.handle);
     libusb_exit(NULL);
-    exit(0);
+    //exit(0); moved to calling locations
 }
 
 // This is where I read the USB device to get the latest data.
@@ -529,7 +567,7 @@ int getit(int whichOne, int noisy){
                     LIBUSB_REQUEST_TYPE_CLASS | LIBUSB_RECIPIENT_INTERFACE | LIBUSB_ENDPOINT_IN,
                     //These bytes were stolen with a USB sniffer
                     0x01,0x0100+whichOne,0,
-                    data, 50, 10000);
+                    data, 50, 100000);
     if (actual < 0){
         fprintf(stderr,"Read didn't work for report %d, %s\n", whichOne, libusb_strerror(actual));
     }
@@ -562,8 +600,8 @@ int getit(int whichOne, int noisy){
 int main(int argc, char **argv)
 {
     char *usage = {"usage: %s -u -n\n"};
-    int libusbDebug = 0; //This will turn on the DEBUG for libusb
-    int noisy = 0;  //This will print the packets as they come in
+    int libusbDebug = 1; //This will turn on the DEBUG for libusb
+    int noisy = 1;  //This will print the packets as they come in
     int quiet = 1;
     libusb_device **devs;
     int r, err, c;
@@ -609,9 +647,9 @@ int main(int argc, char **argv)
     // This is where you can get debug output from libusb.
     // just set it to LIBUSB_LOG_LEVEL_DEBUG
     if (libusbDebug)
-        libusb_set_debug(NULL, LIBUSB_LOG_LEVEL_DEBUG);//libusb_set_option(ctx, LIBUSB_OPTION_LOG_LEVEL, LIBUSB_DEBUG);
+        libusb_set_option(NULL, LIBUSB_OPTION_LOG_LEVEL, LIBUSB_LOG_LEVEL_DEBUG);
     else
-        libusb_set_debug(NULL, LIBUSB_LOG_LEVEL_INFO);//libusb_set_option(ctx, LIBUSB_OPTION_LOG_LEVEL, LIBUSB_LOG_LEVEL_WARNING);
+        libusb_set_option(NULL, LIBUSB_OPTION_LOG_LEVEL, LIBUSB_LOG_LEVEL_WARNING);
 
 
     cnt = libusb_get_device_list(NULL, &devs);
@@ -735,6 +773,7 @@ int main(int argc, char **argv)
     if (err){
         fprintf(stderr,"clear halt crapped, %s  SHUCKS\n", libusb_strerror(err));;
         closeUpAndLeave();
+        exit(1);
     }
     else {
         fprintf(stderr,"OK\n");
@@ -758,7 +797,6 @@ int main(int argc, char **argv)
     / * Use logmsg for output from here on. * /
 */
 
-
     // So, for the weather station we now know it has one endpoint and it is set to
     // send data to the host.  Now we can experiment with that.
     //
@@ -766,12 +804,21 @@ int main(int argc, char **argv)
     // I'll space them out a bit.  It's weather, and it doesn't change very fast.
     int tickcounter= 0;
     while(1){
+        int rc;
         sleep(1);
         if(tickcounter++ % timeint1 == 0){
-            getit(1, noisy);
+            rc = getit(1, noisy);
+            if(rc < 0){
+                closeUpAndLeave();
+                exit(1);
+            }
         }
         if(tickcounter % timeint2 == 0){
-            getit(2, noisy);
+            rc = getit(2, noisy);
+            if(rc < 0){
+                closeUpAndLeave();
+                exit(1);
+            }
         }
         if ((tickcounter % timeint3 == 0) & !quiet){
             showit();
@@ -779,6 +826,7 @@ int main(int argc, char **argv)
         if (tickcounter % timeint4 == 0){
             wucurl(&weatherData, &wu);
             mccurl(&weatherData, &wu);
+            write_line(&weatherData, &wu);
         }
     }
 }
