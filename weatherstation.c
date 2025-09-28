@@ -115,9 +115,6 @@ void sig_handler(int signo)
     closeUpAndLeave();
 }
 
-/*
-This tiny thing simply takes the data and prints it so we can see it
-*/
 // Array to translate the integer direction provided to text
 char *Direction[] = {
     "NW",
@@ -157,7 +154,10 @@ char *DirectionNum[] = {
     "180"
 };
 
-void showit(){
+/*
+This tiny thing simply takes the data and prints it so we can see it
+*/
+void showit(void) {
 
     fprintf(stdout, "{\"windSpeed\":{\"WS\":\"%0.1f\",\"t\":\"%ld\"},"
                     "\"windDirection\":{\"WDS\":\"%s\",\"t\":\"%ld\"},"
@@ -299,6 +299,7 @@ int store_sqlite(struct weatherData * wxdata)
 
     return ret;
 }
+
 /*
 This code translates the data from the 5 in 1 sensors to something
 that can be used by a human.
@@ -312,18 +313,22 @@ float getWindSpeed(char *data){
 int getWindDirection(char *data){
     return(data[4] & 0x0f);
 }
-float getTemp(char *data){
+float getTemp(char *data)
+{
     // This item spans bytes, have to reconstruct it
     int leftSide = (data[4] & 0x0f) << 7;
     int rightSide = data[5] & 0x7f;
     float combined = leftSide | rightSide;
     return((combined - 400) / 10.0);
 }
-int getHumidity(char *data){
+int getHumidity(char *data)
+{
     int howWet = data[6] &0x7f;
     return(howWet);
 }
-int getRainCount(char* data, int* rawCount, int noisy){
+
+int getRainCount(char* data, int* rawCount, int noisy)
+{
     static int  did_daily_reset = 0;
     time_t utcnow;
     struct tm* locnow;
@@ -398,6 +403,12 @@ void decode(char *data, int length, int noisy){
     //There are two varieties of data, both of them have wind speed
     // first variety of the data
     if ((data[2] & 0x0f) == 1){ // this has wind speed, direction and rainfall
+        //# 0x7 indicates battery ok, 0xb indicates low battery?
+        //a = (data[3] & 0xf0) >> 4
+        //return 0 if a == 0x7 else 1
+        sensor_battery = (data[3] & 0xf0) >> 4;
+        //if(noisy)
+            fprintf(stderr,"Sensor Battery: 0x%1x ", sensor_battery);
         if(noisy)
             fprintf(stderr,"Wind Speed: %.1f ",getWindSpeed(data));
         weatherData.windSpeed = getWindSpeed(data);
