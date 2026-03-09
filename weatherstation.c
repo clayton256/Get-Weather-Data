@@ -113,8 +113,10 @@ size_t strlcpy(char *dst, const char *src, size_t dstsize)
 void sig_handler(int signo)
 {
   if (signo == SIGINT)
+  {
     fprintf(stderr,"Shutting down ...\n");
     closeUpAndLeave();
+  }
 }
 
 // Array to translate the integer direction provided to text
@@ -159,11 +161,11 @@ char *DirectionNum[] = {
 /*
 This tiny thing simply takes the data and prints it so we can see it
 */
-void showit(void) {
-
+void showit(void)
+{
     fprintf(stdout, "{\"windSpeed\":{\"WS\":\"%0.1f\",\"t\":\"%ld\"},"
                     "\"windDirection\":{\"WDS\":\"%s\",\"t\":\"%ld\"},"
-                    "\"windDirection\":{\"WDD\":\"%s\",\"t\":\"%ld\"},"
+                    "\"windDirNum\":{\"WDD\":\"%s\",\"t\":\"%ld\"},"
                     "\"windDirRaw\":{\"WDR\":\"%d\",\"t\":\"%ld\"},"
                     "\"temperature\":{\"T\":\"%0.1f\",\"t\":\"%ld\"},"
                     "\"humidity\":{\"H\":\"%d\",\"t\":\"%ld\"},"
@@ -221,6 +223,7 @@ int mccurl(struct weatherData * wx, struct stationWU * wu)
         curl_easy_cleanup(curl);
         fprintf(stderr,"CURL retval: %d\n", retval);
     }
+    curl_global_cleanup(curl);
     return 0;
 }
 
@@ -296,6 +299,7 @@ int wucurl(struct weatherData * wx, struct stationWU * wu)
         fprintf(stderr,"CURL retval: %d\n", retval);
         error = FALSE;
     }
+    curl_global_cleanup(curl);
     return error;
 }
 
@@ -326,6 +330,7 @@ int write_line(struct weatherData * wx, struct stationWU * wu)
         );
 
     fptr = fopen("file.txt", "w");
+    if(NULL == fptr) fprintf(stderr, "log file open failed");
     fprintf(fptr, "%s\n", ob);
     fclose(fptr);
     return 0;
@@ -349,7 +354,13 @@ float getWindSpeed(char *data){
     return(speed);
 }
 int getWindDirection(char *data){
-    return(data[4] & 0x0f);
+    unsigned int wind_Dir = data[4] & 0x0f
+    if(wind_dir > 15)
+    {
+        fprintf(stderr, "USB data corrupt, wind_dir %d is too big", wind_dir);
+        wind_dir = 0;
+    }
+    return();
 }
 float getTemp(char *data)
 {
@@ -387,13 +398,13 @@ int getRainCount(char* data, int* rawCount, int noisy)
     // reset daily rain count to zero right after midnight
     time(&utcnow);
     locnow = localtime(&utcnow);
-    if(0 == locnow->tm_hour & 0 == did_daily_reset)
+    if(0 == locnow->tm_hour && 0 == did_daily_reset)
     {
         if(noisy) fprintf(stderr, "Did daily rain reset\n");
         did_daily_reset = 1;
         count = raincount;
     }
-    if(1 == locnow->tm_hour & 1 == did_daily_reset)
+    if(1 == locnow->tm_hour && 1 == did_daily_reset)
     {
         if(noisy) fprintf(stderr, "Ready for tomorrows daily rain reset\n");
         did_daily_reset = 0;
@@ -432,6 +443,7 @@ float getBaroPress(char* data, int noisy)
 
 // Now that I have the data from the station, do something useful with it.
 void decode(char *data, int length, int noisy){
+    int sensor_battery;
     //int i;
     //for(i=0; i<length; i++){
     //    fprintf(stderr,"%02X ",data[i]);
@@ -550,6 +562,7 @@ void closeUpAndLeave(){
     }
     libusb_close(weatherStation.handle);
     libusb_exit(NULL);
+    //libusb_free_config_descriptor(config);
     //exit(0); moved to calling locations
 }
 
@@ -602,7 +615,7 @@ int main(int argc, char **argv)
     char *usage = {"usage: %s -u -n\n"};
     int libusbDebug = 1; //This will turn on the DEBUG for libusb
     int noisy = 1;  //This will print the packets as they come in
-    int quiet = 1;
+    int quiet = 0;
     libusb_device **devs;
     int r, err, c;
     ssize_t cnt;
@@ -710,7 +723,7 @@ int main(int argc, char **argv)
     }
 
     int activeConfig;
-    err =libusb_get_configuration(weatherStation.handle, &activeConfig);
+    err = libusb_get_configuration(weatherStation.handle, &activeConfig);
     if (err){
         fprintf(stderr,"Can't get current active configuration, %s\n", libusb_strerror(err));;
         exit(1);
@@ -805,7 +818,7 @@ int main(int argc, char **argv)
     int tickcounter= 0;
     while(1){
         int rc;
-        sleep(1);
+        sleep(10);
         if(tickcounter++ % timeint1 == 0){
             rc = getit(1, noisy);
             if(rc < 0){
@@ -820,7 +833,7 @@ int main(int argc, char **argv)
                 exit(1);
             }
         }
-        if ((tickcounter % timeint3 == 0) & !quiet){
+        if ((tickcounter % timeint3 == 0) && !quiet){
             showit();
         }
         if (tickcounter % timeint4 == 0){
@@ -829,4 +842,7 @@ int main(int argc, char **argv)
             write_line(&weatherData, &wu);
         }
     }
+    libusb_free_config_descriptor(config);
+
+    return 0;
 }
