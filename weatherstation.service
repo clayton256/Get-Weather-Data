@@ -1,0 +1,13 @@
+[Unit]
+Description=My Weather Station Service
+After=network.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/home/clayton/Developer/Get-Weather-Data/weatherstation
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+
