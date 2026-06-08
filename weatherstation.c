@@ -224,6 +224,38 @@ int mccurl(struct weatherData * wx, struct stationWU * wu)
     return 0;
 }
 
+int writelog(struct weatherData * wx)
+{
+    int         ret = TRUE;
+    time_t      now;
+    struct tm * dt;
+    char        logline[2048];
+    char        dest[70];
+    FILE      * fp = NULL;
+
+    fp = fopen("/var/log/weatherstation.log", "a");
+    if(NULL != fp)
+    {
+        time(&now);
+        dt = gmtime(&now);
+
+        strftime(dest,sizeof(dest)-1, "%FT%T", dt);
+        char *urlfmt = "tm=%s,t1=%0.1f,rh=%d,wdspd=%0.1f,wddir=%s,rn=%0.1f,bp=%0.1f";
+        snprintf(logline, sizeof(logline)-1,
+            urlfmt,
+            dest,
+            wx->temperature,
+            wx->humidity,
+            wx->windSpeed,
+            Direction[wx->windDirection],
+            (wx->rainCounter*0.01),
+            wx->barometer
+        );
+        fprintf(fp, "strlen(url)=%ld\nurl=%s\n", strlen(logline), logline);
+        ret = FALSE;
+    }
+    return ret;
+}
 
 int wucurl(struct weatherData * wx, struct stationWU * wu)
 {
@@ -781,8 +813,8 @@ int main(int argc, char **argv)
             showit();
         }
         if (tickcounter % timeint4 == 0){
-            //wucurl(&weatherData, &wu);
-            //mccurl(&weatherData, &wu);
+            wucurl(&weatherData, &wu);
+            mccurl(&weatherData, &wu);
         }
     }
 }
