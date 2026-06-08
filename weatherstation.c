@@ -227,7 +227,7 @@ int mccurl(struct weatherData * wx, struct stationWU * wu)
     return 0;
 }
 
-int writelog(struct weatherData * wx)
+int write_log(struct weatherData * wx, struct stationWU * wu)
 {
     int         ret = TRUE;
     time_t      now;
@@ -361,7 +361,7 @@ int write_line(struct weatherData * wx, struct stationWU * wu)
             wx->barometer
         );
 
-    fptr = fopen("file.txt", "w");
+    fptr = fopen("/var/run/weatherstation", "w");
     if(NULL == fptr) fprintf(stderr, "log file open failed");
     fprintf(fptr, "%s\n", ob);
     fclose(fptr);
@@ -871,6 +871,7 @@ int main(int argc, char **argv)
         if (tickcounter % timeint4 == 0){
             wucurl(&weatherData, &wu);
             mccurl(&weatherData, &wu);
+            write_log(&weatherData, &wu);
             write_line(&weatherData, &wu);
         }
     }
