@@ -223,7 +223,7 @@ int mccurl(struct weatherData * wx, struct stationWU * wu)
         curl_easy_cleanup(curl);
         fprintf(stderr,"CURL retval: %d\n", retval);
     }
-    curl_global_cleanup(curl);
+    curl_global_cleanup();
     return 0;
 }
 
@@ -299,7 +299,7 @@ int wucurl(struct weatherData * wx, struct stationWU * wu)
         fprintf(stderr,"CURL retval: %d\n", retval);
         error = FALSE;
     }
-    curl_global_cleanup(curl);
+    curl_global_cleanup();
     return error;
 }
 
@@ -354,13 +354,13 @@ float getWindSpeed(char *data){
     return(speed);
 }
 int getWindDirection(char *data){
-    unsigned int wind_Dir = data[4] & 0x0f
-    if(wind_dir > 15)
+    unsigned int wind_Dir = data[4] & 0x0f;
+    if(wind_Dir > 15)
     {
-        fprintf(stderr, "USB data corrupt, wind_dir %d is too big", wind_dir);
-        wind_dir = 0;
+        fprintf(stderr, "USB data corrupt, wind_dir %d is too big", wind_Dir);
+        wind_Dir = 0;
     }
-    return();
+    return(0);
 }
 float getTemp(char *data)
 {
