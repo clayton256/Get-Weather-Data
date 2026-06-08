@@ -50,7 +50,7 @@
 //this bit added by JZ
 //time intervals in seconds to wait between updates
 int timeint1 = 10; //report type 1
-int timeint2 = 30; //report type 2
+int timeint2 = 300; //report type 2
 int timeint3 = 15; //put out data
 int timeint4 = 600; //upload data
 
@@ -113,13 +113,12 @@ size_t strlcpy(char *dst, const char *src, size_t dstsize)
 void sig_handler(int signo)
 {
   if (signo == SIGINT)
+  {
     fprintf(stderr,"Shutting down ...\n");
     closeUpAndLeave();
+  }
 }
 
-/*
-This tiny thing simply takes the data and prints it so we can see it
-*/
 // Array to translate the integer direction provided to text
 char *Direction[] = {
     "NW",
@@ -159,11 +158,14 @@ char *DirectionNum[] = {
     "180"
 };
 
-void showit(){
-
+/*
+This tiny thing simply takes the data and prints it so we can see it
+*/
+void showit(void)
+{
     fprintf(stdout, "{\"windSpeed\":{\"WS\":\"%0.1f\",\"t\":\"%ld\"},"
                     "\"windDirection\":{\"WDS\":\"%s\",\"t\":\"%ld\"},"
-                    "\"windDirection\":{\"WDD\":\"%s\",\"t\":\"%ld\"},"
+                    "\"windDirNum\":{\"WDD\":\"%s\",\"t\":\"%ld\"},"
                     "\"windDirRaw\":{\"WDR\":\"%d\",\"t\":\"%ld\"},"
                     "\"temperature\":{\"T\":\"%0.1f\",\"t\":\"%ld\"},"
                     "\"humidity\":{\"H\":\"%d\",\"t\":\"%ld\"},"
@@ -198,7 +200,7 @@ int mccurl(struct weatherData * wx, struct stationWU * wu)
     time(&now);
     dt = gmtime(&now);
 
-    strftime(dest,sizeof(dest)-1, "%FT%T", dt);
+    strftime(dest, sizeof(dest)-1, "%FT%T", dt);
     char *urlfmt = "https://markandgrace.com/wx/index.php?view=upload&tm=%s&t1=%0.1f&rh=%d&wdspd=%0.1f&wddir=%s&rn=%0.1f&bp=%0.1f";
     snprintf(url, sizeof(url)-1,
             urlfmt,
@@ -221,6 +223,7 @@ int mccurl(struct weatherData * wx, struct stationWU * wu)
         curl_easy_cleanup(curl);
         fprintf(stderr,"CURL retval: %d\n", retval);
     }
+    curl_global_cleanup();
     return 0;
 }
 
@@ -328,7 +331,41 @@ int wucurl(struct weatherData * wx, struct stationWU * wu)
         fprintf(stderr,"CURL retval: %d\n", retval);
         error = FALSE;
     }
+    curl_global_cleanup();
     return error;
+}
+
+int write_line(struct weatherData * wx, struct stationWU * wu)
+{
+    FILE* fptr;
+    double dewpt = wx->temperature - ((100.0 - (double)wx->humidity) / 5.0);
+
+    time_t      now;
+    struct tm * dt;
+    char        ob[2048];
+    char        dest[70];
+
+    time(&now);
+    dt = gmtime(&now);
+
+    strftime(dest, sizeof(dest)-1, "%FT%T", dt);
+    char *obfmt = "tm=%s;t1=%0.1f;rh=%d;wdspd=%0.1f;wddir=%s;rn=%0.1f;bp=%0.1f";
+    snprintf(ob, sizeof(ob)-1,
+            obfmt,
+            dest,
+            wx->temperature,
+            wx->humidity,
+            wx->windSpeed,
+            Direction[wx->windDirection],
+            (wx->rainCounter*0.01),
+            wx->barometer
+        );
+
+    fptr = fopen("file.txt", "w");
+    if(NULL == fptr) fprintf(stderr, "log file open failed");
+    fprintf(fptr, "%s\n", ob);
+    fclose(fptr);
+    return 0;
 }
 
 int store_sqlite(struct weatherData * wxdata)
@@ -337,6 +374,7 @@ int store_sqlite(struct weatherData * wxdata)
 
     return ret;
 }
+
 /*
 This code translates the data from the 5 in 1 sensors to something
 that can be used by a human.
@@ -348,20 +386,30 @@ float getWindSpeed(char *data){
     return(speed);
 }
 int getWindDirection(char *data){
-    return(data[4] & 0x0f);
+    unsigned int wind_Dir = data[4] & 0x0f;
+    if(wind_Dir > 15)
+    {
+        fprintf(stderr, "USB data corrupt, wind_dir %d is too big", wind_Dir);
+        wind_Dir = 0;
+    }
+    return(0);
 }
-float getTemp(char *data){
+float getTemp(char *data)
+{
     // This item spans bytes, have to reconstruct it
     int leftSide = (data[4] & 0x0f) << 7;
     int rightSide = data[5] & 0x7f;
     float combined = leftSide | rightSide;
     return((combined - 400) / 10.0);
 }
-int getHumidity(char *data){
+int getHumidity(char *data)
+{
     int howWet = data[6] &0x7f;
     return(howWet);
 }
-int getRainCount(char* data, int* rawCount, int noisy){
+
+int getRainCount(char* data, int* rawCount, int noisy)
+{
     static int  did_daily_reset = 0;
     time_t utcnow;
     struct tm* locnow;
@@ -382,13 +430,13 @@ int getRainCount(char* data, int* rawCount, int noisy){
     // reset daily rain count to zero right after midnight
     time(&utcnow);
     locnow = localtime(&utcnow);
-    if(0 == locnow->tm_hour & 0 == did_daily_reset)
+    if(0 == locnow->tm_hour && 0 == did_daily_reset)
     {
         if(noisy) fprintf(stderr, "Did daily rain reset\n");
         did_daily_reset = 1;
         count = raincount;
     }
-    if(1 == locnow->tm_hour & 1 == did_daily_reset)
+    if(1 == locnow->tm_hour && 1 == did_daily_reset)
     {
         if(noisy) fprintf(stderr, "Ready for tomorrows daily rain reset\n");
         did_daily_reset = 0;
@@ -427,6 +475,7 @@ float getBaroPress(char* data, int noisy)
 
 // Now that I have the data from the station, do something useful with it.
 void decode(char *data, int length, int noisy){
+    int sensor_battery;
     //int i;
     //for(i=0; i<length; i++){
     //    fprintf(stderr,"%02X ",data[i]);
@@ -436,6 +485,12 @@ void decode(char *data, int length, int noisy){
     //There are two varieties of data, both of them have wind speed
     // first variety of the data
     if ((data[2] & 0x0f) == 1){ // this has wind speed, direction and rainfall
+        //# 0x7 indicates battery ok, 0xb indicates low battery?
+        //a = (data[3] & 0xf0) >> 4
+        //return 0 if a == 0x7 else 1
+        sensor_battery = (data[3] & 0xf0) >> 4;
+        //if(noisy)
+            fprintf(stderr,"Sensor Battery: 0x%1x ", sensor_battery);
         if(noisy)
             fprintf(stderr,"Wind Speed: %.1f ",getWindSpeed(data));
         weatherData.windSpeed = getWindSpeed(data);
@@ -539,6 +594,7 @@ void closeUpAndLeave(){
     }
     libusb_close(weatherStation.handle);
     libusb_exit(NULL);
+    //libusb_free_config_descriptor(config);
     //exit(0); moved to calling locations
 }
 
@@ -591,7 +647,7 @@ int main(int argc, char **argv)
     char *usage = {"usage: %s -u -n\n"};
     int libusbDebug = 1; //This will turn on the DEBUG for libusb
     int noisy = 1;  //This will print the packets as they come in
-    int quiet = 1;
+    int quiet = 0;
     libusb_device **devs;
     int r, err, c;
     ssize_t cnt;
@@ -636,9 +692,9 @@ int main(int argc, char **argv)
     // This is where you can get debug output from libusb.
     // just set it to LIBUSB_LOG_LEVEL_DEBUG
     if (libusbDebug)
-        libusb_set_debug(NULL, LIBUSB_LOG_LEVEL_DEBUG);//libusb_set_option(ctx, LIBUSB_OPTION_LOG_LEVEL, LIBUSB_DEBUG);
+        libusb_set_option(NULL, LIBUSB_OPTION_LOG_LEVEL, LIBUSB_LOG_LEVEL_DEBUG);
     else
-        libusb_set_debug(NULL, LIBUSB_LOG_LEVEL_INFO);//libusb_set_option(ctx, LIBUSB_OPTION_LOG_LEVEL, LIBUSB_LOG_LEVEL_WARNING);
+        libusb_set_option(NULL, LIBUSB_OPTION_LOG_LEVEL, LIBUSB_LOG_LEVEL_WARNING);
 
 
     cnt = libusb_get_device_list(NULL, &devs);
@@ -699,7 +755,7 @@ int main(int argc, char **argv)
     }
 
     int activeConfig;
-    err =libusb_get_configuration(weatherStation.handle, &activeConfig);
+    err = libusb_get_configuration(weatherStation.handle, &activeConfig);
     if (err){
         fprintf(stderr,"Can't get current active configuration, %s\n", libusb_strerror(err));;
         exit(1);
@@ -794,7 +850,7 @@ int main(int argc, char **argv)
     int tickcounter= 0;
     while(1){
         int rc;
-        sleep(1);
+        sleep(10);
         if(tickcounter++ % timeint1 == 0){
             rc = getit(1, noisy);
             if(rc < 0){
@@ -809,12 +865,16 @@ int main(int argc, char **argv)
                 exit(1);
             }
         }
-        if ((tickcounter % timeint3 == 0) & !quiet){
+        if ((tickcounter % timeint3 == 0) && !quiet){
             showit();
         }
         if (tickcounter % timeint4 == 0){
             wucurl(&weatherData, &wu);
             mccurl(&weatherData, &wu);
+            write_line(&weatherData, &wu);
         }
     }
+    libusb_free_config_descriptor(config);
+
+    return 0;
 }
